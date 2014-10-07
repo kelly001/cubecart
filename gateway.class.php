@@ -13,8 +13,6 @@ class Gateway {
         $this->_module	= $module;
         $this->_basket =& $GLOBALS['cart']->basket;
         $this->_url			= 'https://z-payment.com/merchant.php';
-        $this->_path		= '/gateway/transact.dll';
-        $this->_aim_delimiter = '|';
     }
 
     ##################################################
@@ -37,17 +35,15 @@ class Gateway {
 
     public function fixedVariables() {
 
-            $fp_sequence 	= $this->_basket['cart_order_id'].time(); // Enter an invoice or other unique number.
-            $fp_timestamp 	= time();
-            $fingerprint 	= $this->_getFingerprint($this->_module['acNo'],$this->_module['txnkey'], $this->_basket['total'], $fp_sequence, $fp_timestamp);
-
             $hidden = array(
                 'LMI_PAYEE_PURSE'           => $this->_module['shop_id'],
-                'merchant_id' 				=> $this->_module['merchant_id'],
+                //'merchant' 				=> $this->_module['merchant_key'],
                 'LMI_PAYMENT_AMOUNT'	    => $this->_basket['total'],
                 'LMI_PAYMENT_NO'			=> $this->_basket['cart_order_id'],
+                'CLIENT_MAIL'               => $this->_basket['billing_address']['email'],
                 'LMI_PAYMENT_DESC'			=> "Payment for order #".$this->_basket['cart_order_id'],
-                'x_version'				=> '3.1',
+                'ZP_SIGN'               =>
+                    $this->ZP_SIGN($this->_module['shop_id'], $this->_basket['cart_order_id'], $this->_basket['total'], $this->_module['init_pass'] ),
                 'x_show_form'			=> 'payment_form',
                 'x_test_request'		=> 'false',
                 'x_method'				=> 'cc',
@@ -60,32 +56,34 @@ class Gateway {
                 'x_zip'					=> $this->_basket['billing_address']['postcode'],
                 'x_country'				=> $this->_basket['billing_address']['country_iso'],
 
-                'x_ship_to_first_name'	=> $this->_basket['delivery_address']['first_name'],
-                'x_ship_to_last_name'	=> $this->_basket['delivery_address']['last_name'],
-                'x_ship_to_address'		=> $this->_basket['delivery_address']['line1'].' '.$this->_basket['delivery_address']['line2'],
-                'x_ship_to_city'		=> $this->_basket['delivery_address']['town'],
-                'x_ship_to_state'		=> $this->_basket['delivery_address']['state'],
-                'x_ship_to_zip'			=> $this->_basket['delivery_address']['postcode'],
-                'x_ship_to_country'		=> $this->_basket['delivery_address']['country_iso'],
-
                 'x_email'				=> $this->_basket['billing_address']['email'],
                 'x_phone'				=> $this->_basket['billing_address']['phone'],
 
                 'x_customer_ip' 		=> get_ip_address(),
                 'x_receipt_link_method' => 'POST',
                 'x_receipt_link_text'	=> 'Return to Store &amp; Confirm Order',
-                'x_receipt_link_url'	=> $GLOBALS['storeURL'].'/index.php?_g=remote&amp;type=gateway&amp;cmd=process&amp;module=Authorize'
-
-                /* Ideal setup doesn't work :(
-                'x_receipt_link_url'	=> $GLOBALS['storeURL'].'?_a=vieworder&cart_order_id='.$this->_basket['cart_order_id'],
-                'x_relay_response'		=> 'TRUE',
-                'x_relay_url'			=> $GLOBALS['storeURL'].'/index.php?_g=rm&amp;type=gateway&amp;cmd=call&amp;module=Authorize'
-                */
+                'x_receipt_link_url'	=> $GLOBALS['storeURL'].'/index.php?_g=remote&amp;type=gateway&amp;cmd=process&amp;module=ZPayment'
             );
+
         return (isset($hidden)) ? $hidden : false;
     }
 
     public function call() {
+        echo("test");
+        die();
+        return false;
+    }
+
+
+    public function cancel() {
+        $order				= Order::getInstance();
+        $cart_order_id 		= $this->_basket['cart_order_id'];
+        $order_summary		= $order->getSummary($cart_order_id);
+
+        $transData['notes'][]	= "This means that a payment was reversed due to a chargeback or other type of reversal. The funds have been debited from your account balance and returned to the customer. The reason for the reversal is given by the reason_code variable.";
+        $order->paymentStatus(Order::PAYMENT_CANCEL, $cart_order_id);
+        $order->orderStatus(Order::ORDER_CANCELLED, $cart_order_id);
+        $order->logTransaction($transData);
         return false;
     }
 
@@ -95,91 +93,66 @@ class Gateway {
         $cart_order_id 		= $this->_basket['cart_order_id'];
         $order_summary		= $order->getSummary($cart_order_id);
 
-        if($this->_module['mode']=='sim') {
+        /*$request	= new Request($this->_url);
+        $request->setSSL();
+        $request->setData($fields_array);
+        $data		= $request->send();*/
 
-            if($_POST['x_response_code']){
-                $status = 'Approved';
-                $order->orderStatus(Order::ORDER_PROCESS, $_POST['x_invoice_num']);
-                $order->paymentStatus(Order::PAYMENT_SUCCESS, $_POST['x_invoice_num']);
-            } else {
-                $status = 'Declined';
-                $order->orderStatus(Order::ORDER_PENDING, $_POST['x_invoice_num']);
-                $order->paymentStatus(Order::PAYMENT_PENDING, $_POST['x_invoice_num']);
-            }
-
-            $transData['notes']			= $_POST['x_response_reason_text'];
-            $transData['order_id']		= $_POST['x_invoice_num'];
-            $transData['trans_id']		= $_POST['x_trans_id'];
-            $transData['amount']		= $_POST['x_amount'];
-            $transData['extra']			= '';
-
-        } else {
-            ## Process the payment for AIM
-            $authnet_array	= array(
-                'x_test_request'		=> $x_test_request,
-                'x_login'				=> $this->_module['acNo'],
-                'x_tran_key'			=> $this->_module['txnkey'],
-                "x_password"			=> $this->_module['password'],
-                'x_version'				=> '3.1',
-                'x_delim_data'			=> 'TRUE',
-                'x_delim_char'			=> $this->_aim_delimiter,
-                'x_type'				=> $this->_module['payment_type'], //AUTH_CAPTURE or AUTH_ONLY
-                'x_method'				=> 'CC',
-                'x_amount'				=> $this->_basket['total'],
-                'x_card_num'			=> trim($_POST['cardNumber']),
-                'x_exp_date'			=> str_pad($_POST['expirationMonth'], 2, '0', STR_PAD_LEFT).substr($_POST["expirationYear"],2,2),
-                'x_card_code'			=> trim($_POST['cvc2']),
-                'x_invoice_num'			=> $this->_basket['cart_order_id'],
-                'x_description'			=> "Payment for order #".$this->_basket['cart_order_id'],
-                'x_first_name'			=> trim($_POST['firstName']),
-                'x_last_name'			=> trim($_POST['lastName']),
-                'x_address'				=> trim($_POST['addr1']).' '.trim($_POST['addr2']),
-                'x_city'				=> trim($_POST['city']),
-                'x_state'				=> trim($_POST['state']),
-                'x_zip'					=> trim($_POST['postcode']),
-                'x_country'				=> trim($_POST['country']),
-                'x_email'				=> trim($_POST['emailAddress']),
-                'x_customer_ip' 		=> get_ip_address(),
-                'x_test_request'		=> ($this->_module['testMode']) ? 'TRUE' : 'FALSE'
+        if (isset($_REQUEST)){
+            ## Process the payment
+            $fields_array	= array(
+                'LMI_PAYEE_PURSE' => $_REQUEST['LMI_PAYEE_PURSE'],
+                'LMI_PAYMENT_AMOUNT' => $_REQUEST['LMI_PAYMENT_AMOUNT'],
+                'LMI_PAYMENT_NO' => $_REQUEST['LMI_PAYMENT_NO'],
+                'LMI_SYS_TRANS_NO' => $_REQUEST['LMI_SYS_TRANS_NO'],
+                'LMI_SECRET_KEY' => $_REQUEST['LMI_SECRET_KEY'],
+                'LMI_MODE' => $_REQUEST['LMI_MODE'],
+                'LMI_SYS_INVS_NO' => $_REQUEST['LMI_SYS_INVS_NO'],
+                'LMI_SYS_TRANS_DATE' => $_REQUEST['LMI_SYS_TRANS_DATE'],
+                'LMI_PAYER_PURSE' => $_REQUEST['LMI_PAYER_PURSE'],
+                'LMI_PAYER_WM' => $_REQUEST['LMI_PAYER_WM'],
+                'LMI_HASH' => $_REQUEST['LMI_HASH'],
+                'shop_id' => $_REQUEST['LMI_PAYEE_PURSE'],
             );
-            $request	= new Request($this->_url, $this->_path);
-            $request->setSSL();
-            $request->setData($authnet_array);
-            $resp		= $request->send();
-            $results 	= explode($this->_aim_delimiter,$resp);
 
-            if($results[0] == 1) {
-                $status	= 'Approved';
-                $order->orderStatus(Order::ORDER_PROCESS, $cart_order_id);
-                $order->paymentStatus(Order::PAYMENT_SUCCESS, $cart_order_id);
-            } elseif($results[0] == 2) {
-                $status	= 'Declined';
-                $order->orderStatus(Order::ORDER_PENDING, $cart_order_id);
+            ## Get the Order ID
+            $cart_order_id	= $_REQUEST['LMI_PAYMENT_NO'];
+
+            $data = $fields_array;
+            if (!empty($cart_order_id) && !empty($data)) {
+                $order				= Order::getInstance();
+                $order_summary		= $order->getSummary($cart_order_id);
+                $transData['notes']	= array();
+                //check LMI_HASH
+                if ($this->check_hash($this->_module['merchant_key'])) {
+                    $transData['notes'][]	= "Payment successful. <br />Address: ".$_POST['address_status']."<br />Payer Status: ".$_POST['payer_status'];
+                    $order->paymentStatus(Order::PAYMENT_SUCCESS, $cart_order_id);
+                    $order->orderStatus(Order::ORDER_PROCESS, $cart_order_id);
+                } else {
+                    $transData['notes'][]	= "Server validation fail";
+                    $order->paymentStatus(Order::PAYMENT_DECLINE, $cart_order_id);
+                    $order->orderStatus(Order::ORDER_DECLINED, $cart_order_id);
+                }
+            } else {
+                $transData['notes'][]	= "Unspecified Error.";
                 $order->paymentStatus(Order::PAYMENT_DECLINE, $cart_order_id);
-            } elseif($results[0] == 3) {
-                $status	= 'Error';
-                $order->orderStatus(Order::ORDER_PENDING, $cart_order_id);
+                $order->orderStatus(Order::ORDER_DECLINED, $cart_order_id);
             }
-
-            $this->_result_message		= $results[3];
-
-            $transData['notes']			= $this->_result_message;
-            $transData['order_id']		= $results[7];
-            $transData['trans_id']		= $results[37];
-            $transData['amount']		= $results[9];
-            $transData['status']		= $status;
-            $transData['customer_id']	= $order_summary['customer_id'];
-            $transData['extra']			= '';
         }
 
-        $transData['status']		= $status;
+        ## Build the transaction log data
+        $extraField = array();
+        $transData['gateway']		= $_GET['module'];
+        $transData['order_id']		= $cart_order_id;
+        $transData['trans_id']		= $_POST['LMI_PAYMENT_NO'];
+        $transData['amount']		= $_POST['LMI_PAYMENT_AMOUNT'];
         $transData['customer_id']	= $order_summary['customer_id'];
-        $transData['gateway']		= 'Authorize.net ('.strtoupper($this->_module['mode']).')';
+        $transData['extra']			= implode("; ", $extraField);
         $order->logTransaction($transData);
 
-        if($status=='Approved') {
-            httpredir(currentPage(array('_g', 'type', 'cmd', 'module'), array('_a' => 'complete')));
-        }
+        print_r($transData);
+        die();
+        return false;
     }
 
     ##################################################
@@ -190,70 +163,7 @@ class Gateway {
 
     public function form() {
 
-        ## Process transaction
-        if (isset($_POST['cardNumber'])) {
-            $return	= $this->process();
-        }
 
-        // Display payment result message
-        if (!empty($this->_result_message))	{
-            $GLOBALS['gui']->setError($this->_result_message);
-        }
-
-        //Show Expire Months
-        $selectedMonth	= (isset($_POST['expirationMonth'])) ? $_POST['expirationMonth'] : date('m');
-        for($i = 1; $i <= 12; ++$i) {
-            $val = sprintf('%02d',$i);
-            $smarty_data['card']['months'][]	= array(
-                'selected'	=> ($val == $selectedMonth) ? 'selected="selected"' : '',
-                'value'		=> $val,
-                'display'	=> $this->formatMonth($val),
-            );
-        }
-
-        ## Show Expire Years
-        $thisYear = date("Y");
-        $maxYear = $thisYear + 10;
-        $selectedYear = isset($_POST['expirationYear']) ? $_POST['expirationYear'] : ($thisYear+2);
-        for($i = $thisYear; $i <= $maxYear; ++$i) {
-            $smarty_data['card']['years'][]	= array(
-                'selected'	=> ($i == $selectedYear) ? 'selected="selected"' : '',
-                'value'		=> $i,
-            );
-        }
-        $GLOBALS['smarty']->assign('CARD', $smarty_data['card']);
-
-        $smarty_data['customer'] = array(
-            'first_name' => isset($_POST['firstName']) ? $_POST['firstName'] : $this->_basket['billing_address']['first_name'],
-            'last_name'	 => isset($_POST['lastName']) ? $_POST['lastName'] : $this->_basket['billing_address']['last_name'],
-            'email'      => isset($_POST['emailAddress']) ? $_POST['emailAddress'] : $this->_basket['billing_address']['email'],
-            'add1'		 => isset($_POST['addr1']) ? $_POST['addr1'] : $this->_basket['billing_address']['line1'],
-            'add2'		 => isset($_POST['addr2']) ? $_POST['addr2'] : $this->_basket['billing_address']['line2'],
-            'city'		 => isset($_POST['city']) ? $_POST['city'] : $this->_basket['billing_address']['town'],
-            'state'		 => isset($_POST['state']) ? $_POST['state'] : $this->_basket['billing_address']['state'],
-            'postcode'		 => isset($_POST['postcode']) ? $_POST['postcode'] : $this->_basket['billing_address']['postcode']
-        );
-
-        $GLOBALS['smarty']->assign('CUSTOMER', $smarty_data['customer']);
-
-        ## Country list
-        $countries = $GLOBALS['db']->select('CubeCart_geo_country', false, false, array('name' => 'ASC'));
-        if ($countries) {
-            $currentIso = isset($_POST['country']) ? $_POST['country'] : $this->_basket['billing_address']['country_iso'];
-            foreach ($countries as $country) {
-                $country['selected']	= ($country['iso'] == $currentIso) ? 'selected="selected"' : '';
-                $smarty_data['countries'][]	= $country;
-            }
-            $GLOBALS['smarty']->assign('COUNTRIES', $smarty_data['countries']);
-        }
-
-        ## Check for custom template for module in skin folder
-        $file_name = 'form.tpl';
-        $form_file = $GLOBALS['gui']->getCustomModuleSkin('gateway', dirname(__FILE__), $file_name);
-        $GLOBALS['gui']->changeTemplateDir($form_file);
-        $ret = $GLOBALS['smarty']->fetch($file_name);
-        $GLOBALS['gui']->changeTemplateDir();
-        return $ret;
     }
 
     private static function _getFingerprint($api_login_id, $transaction_key, $amount, $fp_sequence, $fp_timestamp) {
@@ -261,5 +171,42 @@ class Gateway {
             return hash_hmac("md5", $api_login_id . "^" . $fp_sequence . "^" . $fp_timestamp . "^" . $amount . "^", $transaction_key);
         }
         return bin2hex(mhash(MHASH_MD5, $api_login_id . "^" . $fp_sequence . "^" . $fp_timestamp . "^" . $amount . "^", $transaction_key));
+    }
+
+    private static function ZP_SIGN($shop_id, $no, $amount, $pass) {
+        $sign = md5((int)$shop_id . $no . $amount . $pass);
+        return $sign;
+    }
+
+    private static function check_hash ($key){
+        echo($key);
+        $result = false;
+
+        $LMI_PAYEE_PURSE = $_REQUEST['LMI_PAYEE_PURSE'];
+        $LMI_PAYMENT_AMOUNT = $_REQUEST['LMI_PAYMENT_AMOUNT'];
+        $LMI_PAYMENT_NO = $_REQUEST['LMI_PAYMENT_NO'];
+        $LMI_SYS_TRANS_NO = $_REQUEST['LMI_SYS_TRANS_NO'];
+        $LMI_SECRET_KEY = $_REQUEST['LMI_SECRET_KEY'];
+        $LMI_MODE = $_REQUEST['LMI_MODE'];
+        $LMI_SYS_INVS_NO = $_REQUEST['LMI_SYS_INVS_NO'];
+        $LMI_SYS_TRANS_DATE = $_REQUEST['LMI_SYS_TRANS_DATE'];
+        $LMI_PAYER_PURSE = $_REQUEST['LMI_PAYER_PURSE'];
+        $LMI_PAYER_WM = $_REQUEST['LMI_PAYER_WM'];
+        $LMI_HASH = $_REQUEST['LMI_HASH'];
+        $shop_id = $_REQUEST['LMI_PAYEE_PURSE'];
+
+        if(isset($LMI_SECRET_KEY)) {
+            if($LMI_SECRET_KEY==$key) {
+                $result = true;
+            }
+        } else {
+            $CalcHash = md5($LMI_PAYEE_PURSE.$LMI_PAYMENT_AMOUNT.$LMI_PAYMENT_NO.$LMI_MODE.$LMI_SYS_INVS_NO.$LMI_SYS_TRANS_NO.$LMI_SYS_TRANS_DATE.$key.$LMI_PAYER_PURSE.$LMI_PAYER_WM);
+            if($LMI_HASH == strtoupper($CalcHash)) {
+                $result = true;
+            }
+        }
+
+
+        return $result;
     }
 }
