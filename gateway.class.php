@@ -44,8 +44,6 @@ class Gateway {
                 'LMI_PAYMENT_DESC'			=> "Payment for order #".$this->_basket['cart_order_id'],
                 'ZP_SIGN'               =>
                     $this->ZP_SIGN($this->_module['shop_id'], $this->_basket['cart_order_id'], $this->_basket['total'], $this->_module['init_pass'] ),
-                'x_show_form'			=> 'payment_form',
-                'x_test_request'		=> 'false',
                 'x_method'				=> 'cc',
 
                 'x_first_name'			=> $this->_basket['billing_address']['first_name'],
@@ -59,10 +57,6 @@ class Gateway {
                 'x_email'				=> $this->_basket['billing_address']['email'],
                 'x_phone'				=> $this->_basket['billing_address']['phone'],
 
-                'x_customer_ip' 		=> get_ip_address(),
-                'x_receipt_link_method' => 'POST',
-                'x_receipt_link_text'	=> 'Return to Store &amp; Confirm Order',
-                'x_receipt_link_url'	=> $GLOBALS['storeURL'].'/index.php?_g=remote&amp;type=gateway&amp;cmd=process&amp;module=ZPayment'
             );
 
         return (isset($hidden)) ? $hidden : false;
@@ -125,15 +119,20 @@ class Gateway {
                 $transData['notes']	= array();
                 //check LMI_HASH
                 if ($this->check_hash($this->_module['merchant_key'])) {
+                    $status	= 'Approved';
                     $transData['notes'][]	= "Payment successful. <br />Address: ".$_POST['address_status']."<br />Payer Status: ".$_POST['payer_status'];
                     $order->paymentStatus(Order::PAYMENT_SUCCESS, $cart_order_id);
-                    $order->orderStatus(Order::ORDER_PROCESS, $cart_order_id);
+                    $order->orderStatus(Order::ORDER_COMPLETE, $cart_order_id);
+                    $cart =  Cart::getInstance();
+                    $cart->clear();
                 } else {
+                    $status	= 'Error';
                     $transData['notes'][]	= "Server validation fail";
                     $order->paymentStatus(Order::PAYMENT_DECLINE, $cart_order_id);
                     $order->orderStatus(Order::ORDER_DECLINED, $cart_order_id);
                 }
             } else {
+                $status	= 'Error';
                 $transData['notes'][]	= "Unspecified Error.";
                 $order->paymentStatus(Order::PAYMENT_DECLINE, $cart_order_id);
                 $order->orderStatus(Order::ORDER_DECLINED, $cart_order_id);
@@ -150,9 +149,10 @@ class Gateway {
         $transData['extra']			= implode("; ", $extraField);
         $order->logTransaction($transData);
 
-        print_r($transData);
-        die();
-        return false;
+        /*if($status=='Approved') {
+            httpredir(currentPage(array('_g', 'type', 'cmd', 'module'), array('_a' => 'complete')));
+        }*/
+        return true;
     }
 
     ##################################################
