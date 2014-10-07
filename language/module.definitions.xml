@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<definitions version="1.0">
+ <group name="zpayment">
+  <string name="module_title"><![CDATA[Z-Payment]]></string>
+  <string name="module_description"><![CDATA[Z-Payment]]></string>
+  <string name="shop_id"><![CDATA[Your shop ID 123]]></string>
+  <string name="email"><![CDATA[Email]]></string>
+     <string name="merchant_key"><![CDATA[Merchant Key]]></string>
+     <string name="init_pass"><![CDATA[Initialization password]]></string>
+  <string name="delimeter"><![CDATA[Direct Response Delimiter (AIM Only)]]></string>
+  <string name="delimeter_value"><![CDATA[| (Pipe)]]></string>
+  <string name="settings"><![CDATA[Z-Payment Settings]]></string>
+  <string name="password_mode"><![CDATA[Password Required Mode]]></string>
+  <string name="password_mode_value"><![CDATA[Disabled]]></string>
+ </group>
+</definitions>
