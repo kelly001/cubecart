@@ -5,7 +5,17 @@ class Gateway {
     private $_basket;
     private $_result_message;
     private $_url;
+    private $https_url;
     private $_path;
+
+    public static $STATUS_CREATED = 0;
+    public static  $STATUS_WAIT_PAY = 1;
+    public static $STATUS_WAIT_PROCESSING = 2;
+    public static $STATUS_PROCESSING = 3;
+    public static $STATUS_FINISHED = 4;
+    public static $STATUS_CANCELLED = 5;
+    public static $STATUS_FROZEN = 6;
+    public static $STATUS_ERROR = 99;
 
     public function __construct($module = false, $basket = false) {
         $this->_db		=& $GLOBALS['db'];
@@ -13,6 +23,7 @@ class Gateway {
         $this->_module	= $module;
         $this->_basket =& $GLOBALS['cart']->basket;
         $this->_url			= 'https://z-payment.com/merchant.php';
+        $this->https_url = 'https://z-payment.com/api/get_status_pay.php';
     }
 
     ##################################################
@@ -62,14 +73,14 @@ class Gateway {
         return (isset($hidden)) ? $hidden : false;
     }
 
-    public function call() {
+    public function call123() {
         echo("test");
         die();
         return false;
     }
 
 
-    public function cancel() {
+    public function call() {
         $order				= Order::getInstance();
         $cart_order_id 		= $this->_basket['cart_order_id'];
         $order_summary		= $order->getSummary($cart_order_id);
@@ -77,11 +88,108 @@ class Gateway {
         $transData['notes'][]	= "This means that a payment was reversed due to a chargeback or other type of reversal. The funds have been debited from your account balance and returned to the customer. The reason for the reversal is given by the reason_code variable.";
         $order->paymentStatus(Order::PAYMENT_CANCEL, $cart_order_id);
         $order->orderStatus(Order::ORDER_CANCELLED, $cart_order_id);
+        $cart =  Cart::getInstance();
+        $cart->clear();
         $order->logTransaction($transData);
-        return false;
+        return true;
     }
 
     public function process() {
+
+        ## We're being returned from Z-payment
+        ## This function can do some pre-processing, but must assume NO variables are being passed around
+        ## The basket will be emptied when we get to _a=complete, and the status isn't Failed/Declined
+
+        $order				= Order::getInstance();
+        $cart_order_id 		= $this->_basket['cart_order_id'];
+        $order_summary		= $order->getSummary($cart_order_id);
+        $fields = array();
+
+        if (isset($_REQUEST)){
+            ## Process the payment
+            $fields	= array(
+                'LMI_PAYEE_PURSE' => $_REQUEST['LMI_PAYEE_PURSE'],
+                'LMI_PAYMENT_AMOUNT' => $_REQUEST['LMI_PAYMENT_AMOUNT'],
+                'LMI_PAYMENT_NO' => $_REQUEST['LMI_PAYMENT_NO'],
+                'LMI_SYS_TRANS_NO' => $_REQUEST['LMI_SYS_TRANS_NO'],
+                'LMI_SECRET_KEY' => $_REQUEST['LMI_SECRET_KEY'],
+                'LMI_MODE' => $_REQUEST['LMI_MODE'],
+                'LMI_SYS_INVS_NO' => $_REQUEST['LMI_SYS_INVS_NO'],
+                'LMI_SYS_TRANS_DATE' => $_REQUEST['LMI_SYS_TRANS_DATE'],
+                'LMI_PAYER_PURSE' => $_REQUEST['LMI_PAYER_PURSE'],
+                'LMI_PAYER_WM' => $_REQUEST['LMI_PAYER_WM'],
+                'LMI_HASH' => $_REQUEST['LMI_HASH'],
+                'shop_id' => $_REQUEST['LMI_PAYEE_PURSE'],
+            );
+        }
+        //TEST VAL
+        //$fields['LMI_SYS_TRANS_NO'] = 3216234;
+
+        // request to Z-Payment to get order status;
+        $HASH = md5($this->_module['shop_id']. $fields['LMI_SYS_TRANS_NO'] . $this->_module['merchant_key']);
+        $Values = "ID_SHOP=".$this->_module['shop_id']."&ID_OPER=".$fields['LMI_SYS_TRANS_NO'] ."&HASH=$HASH";
+        /*$request	= new Request($this->https_url);
+        $request->setSSL(true);
+        $request->setMethod('GET');
+        $request->setData($Values);
+        $data		= $request->send();*/
+        $data = $this->SendRequest($this->https_url, $Values, "GET");
+        echo($data);
+        $Data = explode('&', $data);
+        $ArValue = array();
+        if (!empty($cart_order_id) && !empty($data)) {
+            $order				= Order::getInstance();
+            $order_summary		= $order->getSummary($cart_order_id);
+            $transData['notes']	= array();
+            foreach ($Data as $key => $Value) {
+                $PartValue = explode('=', $Value);
+                $ArValue[$PartValue[0]] = $PartValue[1];
+                if ($PartValue[0] == 'STATUS')
+                {
+                    //update db
+                    if ($PartValue[1] == 4 || $PartValue[1] == 6) {
+                        $status	= 'Approved';
+                        $transData['notes'][]	= "Payment successful. <br />Address: ".$_POST['address_status']."<br />Payer Status: ".$_POST['payer_status'];
+                        $order->paymentStatus(Order::PAYMENT_SUCCESS, $cart_order_id);
+                        $order->orderStatus(Order::ORDER_COMPLETE, $cart_order_id);
+                    } else if ($PartValue[1] <= 6) {
+                        $status	= 'Error';
+                        $transData['notes'][]	= "Server validation fail";
+                        $order->paymentStatus(Order::PAYMENT_DECLINE, $cart_order_id);
+                        $order->orderStatus(Order::ORDER_DECLINED, $cart_order_id);
+
+                    } else
+                    {
+                        $status	= 'Error';
+                        $transData['notes'][]	= "Unspecified Error.";
+                        $order->paymentStatus(Order::PAYMENT_DECLINE, $cart_order_id);
+                        $order->orderStatus(Order::ORDER_DECLINED, $cart_order_id);
+
+                    }
+                }
+            }
+        }
+
+        ## Build the transaction log data
+        $extraField = array();
+        $transData['gateway']		= $_GET['module'];
+        $transData['order_id']		= $cart_order_id;
+        $transData['trans_id']		= $_POST['LMI_PAYMENT_NO'];
+        $transData['amount']		= $_POST['LMI_PAYMENT_AMOUNT'];
+        $transData['customer_id']	= $order_summary['customer_id'];
+        $transData['extra']			= implode("; ", $extraField);
+        $order->logTransaction($transData);
+        echo($status);
+        if($status=='Approved') {
+            httpredir(currentPage(array('_g', 'type', 'cmd', 'module'), array('_a' => 'complete')));
+        } else {
+            $cart =  Cart::getInstance();
+            $cart->clear();
+        }
+    }
+
+
+    public function result() {
 
         $order				= Order::getInstance();
         $cart_order_id 		= $this->_basket['cart_order_id'];
@@ -149,9 +257,6 @@ class Gateway {
         $transData['extra']			= implode("; ", $extraField);
         $order->logTransaction($transData);
 
-        /*if($status=='Approved') {
-            httpredir(currentPage(array('_g', 'type', 'cmd', 'module'), array('_a' => 'complete')));
-        }*/
         return true;
     }
 
@@ -208,5 +313,46 @@ class Gateway {
 
 
         return $result;
+    }
+
+    function SendRequest($ACT_URL, $Values, $POST_OR_GET = 'POST')
+    {
+        //Если метод передачи GET
+        if ($POST_OR_GET == 'GET') {
+            $Result = file($ACT_URL . '?' . $Values);
+            if ($Result === false) {
+                die("Не удалось получить ответ по запросу");
+            }
+            $Result = $Result[0];
+
+        } //Если метод передачи POST
+        elseif ($POST_OR_GET == 'POST') {
+            /////////////////////////////////////////////////////
+            //Для работы примера требуется установленный модуль//
+            //библиотеки CURL cайт пакета http://curl.haxx.se  //
+            /////////////////////////////////////////////////////
+            //Инициализация модуля CURL
+            $ch = curl_init($ACT_URL);
+            if (!$ch) {
+                die('Инициализация модуля CURL не выполнена, проверьте его установку');
+            }
+            //Запрос POST
+            curl_setopt($ch, CURLOPT_POST, 1);
+            //Задаем переменные
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $Values);
+            //HTTP заголовки не выводить
+            curl_setopt($ch, CURLOPT_HEADER, 0);
+            //Требуется получить результат запроса
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+            //Редирект запретить
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 0);
+            //Выполнение запроса
+            $Result = curl_exec($ch);
+            if ($Result === false) {
+                die("Error CURL number: " . curl_errno($ch) . " message: " . curl_error($ch));
+            }
+            curl_close($ch);
+        }
+        return $Result;
     }
 }
