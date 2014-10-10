@@ -12,7 +12,6 @@
             <div><label for="shop_id">{$LANG.zpayment.shop_id} *</label><span><input name="module[shop_id]" id="shop_id" class="textbox" type="text" value="{$MODULE.shop_id}" /></span></div>
             <div><label for="merchant_key">{$LANG.zpayment.merchant}*</label><span><input name="module[merchant_key]" id="merchant_key" class="textbox" type="text" value="{$MODULE.merchant_key}" /></span></div>
             <div><label for="init_pass">{$LANG.zpayment.pass}</label><span><input name="module[init_pass]" id="init_pass" class="textbox" type="text" value="{$MODULE.init_pass}" /></span></div>
-            <div><label for="email">{$LANG.zpayment.email}</label><span><input name="module[email]" id="email" class="textbox" type="text" value="{$MODULE.email}" /></span></div>
             {$MODULE_ZONES}
         </fieldset>
         <p>{$LANG.module.description_options}</p>

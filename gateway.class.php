@@ -73,25 +73,8 @@ class Gateway {
         return (isset($hidden)) ? $hidden : false;
     }
 
-    public function call123() {
-        echo("test");
-        die();
-        return false;
-    }
-
-
     public function call() {
-        $order				= Order::getInstance();
-        $cart_order_id 		= $this->_basket['cart_order_id'];
-        $order_summary		= $order->getSummary($cart_order_id);
-
-        $transData['notes'][]	= "This means that a payment was reversed due to a chargeback or other type of reversal. The funds have been debited from your account balance and returned to the customer. The reason for the reversal is given by the reason_code variable.";
-        $order->paymentStatus(Order::PAYMENT_CANCEL, $cart_order_id);
-        $order->orderStatus(Order::ORDER_CANCELLED, $cart_order_id);
-        $cart =  Cart::getInstance();
-        $cart->clear();
-        $order->logTransaction($transData);
-        return true;
+        return false;
     }
 
     public function process() {
@@ -134,7 +117,6 @@ class Gateway {
         $request->setData($Values);
         $data		= $request->send();*/
         $data = $this->SendRequest($this->https_url, $Values, "GET");
-        echo($data);
         $Data = explode('&', $data);
         $ArValue = array();
         if (!empty($cart_order_id) && !empty($data)) {
@@ -147,9 +129,10 @@ class Gateway {
                 if ($PartValue[0] == 'STATUS')
                 {
                     //update db
+                    $transData['status']= $PartValue[1];
                     if ($PartValue[1] == 4 || $PartValue[1] == 6) {
                         $status	= 'Approved';
-                        $transData['notes'][]	= "Payment successful. <br />Address: ".$_POST['address_status']."<br />Payer Status: ".$_POST['payer_status'];
+                        $transData['notes'][]	= "Payment successful.";
                         $order->paymentStatus(Order::PAYMENT_SUCCESS, $cart_order_id);
                         $order->orderStatus(Order::ORDER_COMPLETE, $cart_order_id);
                     } else if ($PartValue[1] <= 6) {
@@ -179,7 +162,7 @@ class Gateway {
         $transData['customer_id']	= $order_summary['customer_id'];
         $transData['extra']			= implode("; ", $extraField);
         $order->logTransaction($transData);
-        echo($status);
+
         if($status=='Approved') {
             httpredir(currentPage(array('_g', 'type', 'cmd', 'module'), array('_a' => 'complete')));
         } else {
@@ -188,6 +171,19 @@ class Gateway {
         }
     }
 
+    public function fail() {
+        $order				= Order::getInstance();
+        $cart_order_id 		= $this->_basket['cart_order_id'];
+        $order_summary		= $order->getSummary($cart_order_id);
+
+        $transData['notes'][]	= "This means that a payment was reversed due to a chargeback or other type of reversal. The funds have been debited from your account balance and returned to the customer. The reason for the reversal is given by the reason_code variable.";
+        $order->paymentStatus(Order::PAYMENT_CANCEL, $cart_order_id);
+        $order->orderStatus(Order::ORDER_CANCELLED, $cart_order_id);
+        $cart =  Cart::getInstance();
+        $cart->clear();
+        $order->logTransaction($transData);
+        return true;
+    }
 
     public function result() {
 
